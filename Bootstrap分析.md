@@ -1,22 +1,22 @@
 # 基本结构
-其实Bootstrap包是最好懂的，因为只有6个文件。
-其中AbstractBootstrapConfig和BootstrapConfig和ServerBootstrapConfig是作为config用的。
-我们可以配置好一个Config，然后丢进Bootstrap类中。
-或者我们用Bootstrap类中的builder方法一个一个配也可以。
+其实Bootstrap包是最好懂的，因为只有6个文件。  
+其中AbstractBootstrapConfig和BootstrapConfig和ServerBootstrapConfig是作为config用的。  
+我们可以配置好一个Config，然后丢进Bootstrap类中。  
+或者我们用Bootstrap类中的builder方法一个一个配也可以。  
 
-Bootstrap分为AbstractBootstrap，Bootstrap和ServerBootstrap。
-因为无论是客户端还是服务端都要bind一个本地端口，所以在AbstractBootstrap中帮忙做了这个事。
-客户端的Bootstrap比较简单，基本没什么事做。
-客户端的ServerBootstrap还需要进行EventLoopGroup的管理之类的配置，所以相应的复杂。
+Bootstrap分为AbstractBootstrap，Bootstrap和ServerBootstrap。  
+因为无论是客户端还是服务端都要bind一个本地端口，所以在AbstractBootstrap中帮忙做了这个事。  
+客户端的Bootstrap比较简单，基本没什么事做。  
+客户端的ServerBootstrap还需要进行EventLoopGroup的管理之类的配置，所以相应的复杂。  
 
 # 本地端口bind
-本地端口的bind是AbstractBootstrap中进行的。
+本地端口的bind是AbstractBootstrap中进行的。  
 我们进行配置完信息后，会调用`bootstrap.bind()`来进行启动。
-他会调用`doBind()`方法，传进去的是本地的地址
+他会调用`doBind()`方法，传进去的是本地的地址  
 ```java
 private ChannelFuture doBind(final SocketAddress localAddress) {
-	//initAndRegister()方法new了一个channel出来，然后进行初始化，
-	//最后把他注册到eventLoopGroup中，因为是异步的，所以返回一个future。
+    //initAndRegister()方法new了一个channel出来，然后进行初始化，
+    //最后把他注册到eventLoopGroup中，因为是异步的，所以返回一个future。
     final ChannelFuture regFuture = initAndRegister();
     final Channel channel = regFuture.channel();
     if (regFuture.cause() != null) {
@@ -46,12 +46,12 @@ private ChannelFuture doBind(final SocketAddress localAddress) {
     }
 }
 ```
-doBind0()的操作其实也很简单，因为前面在initAndRegister()中我们已经把这个channel注册到第一个eventLoopGroup中，
-而eventLoopGroup其实可以做一个线程池的作用，于是我们在调用一个channel的bind方法。就把这个作为listen的channel和一个线程绑定了。
+doBind0()的操作其实也很简单，因为前面在initAndRegister()中我们已经把这个channel注册到第一个eventLoopGroup中，  
+而eventLoopGroup其实可以做一个线程池的作用，于是我们在调用一个channel的bind方法。就把这个作为listen的channel和一个线程绑定了。  
 ```java
 private static void doBind0(
-        final ChannelFuture regFuture, final Channel channel,
-        final SocketAddress localAddress, final ChannelPromise promise) {
+    final ChannelFuture regFuture, final Channel channel,
+    final SocketAddress localAddress, final ChannelPromise promise) {
     channel.eventLoop().execute(new Runnable() {
         @Override
         public void run() {
@@ -65,12 +65,12 @@ private static void doBind0(
 }
 ```
 
-至此，如果是客户端，其实工作已经完成了。
-但是如果是服务端，还有一个worker的EventLoopGroup未看到身影。
-但是其实也已经完成了，就在我们之前的那个initAndRegister()方法中。
+至此，如果是客户端，其实工作已经完成了。  
+但是如果是服务端，还有一个worker的EventLoopGroup未看到身影。  
+但是其实也已经完成了，就在我们之前的那个initAndRegister()方法中。  
 
 # worker-EventLoopGroup的运作
-在initAndRegister()方法中
+在`initAndRegister()`方法中
 ```java
 final ChannelFuture initAndRegister() {
     Channel channel = null;
@@ -84,14 +84,14 @@ final ChannelFuture initAndRegister() {
     return regFuture;
 }
 ```
-调用了init(channel)这个方法，这个方法是个抽象方法，各自的子类实现。
-在ServerBootstrap中的实现最后还对worker的EventLoopGroup进行了操作。
+调用了`init(channel)`这个方法，这个方法是个抽象方法，各自的子类实现。  
+在ServerBootstrap中的实现最后还对worker的EventLoopGroup进行了操作。  
 ```java
 void init(Channel channel) throws Exception {
-	//option的操作省略
-	//Attrs的操作省略
+    //option的操作省略
+    //Attrs的操作省略
 
-	//得到与channel对应的pipeline
+    //得到与channel对应的pipeline
     ChannelPipeline p = channel.pipeline();
 
     //这个就是worker-eventLoopGroup
@@ -124,11 +124,11 @@ void init(Channel channel) throws Exception {
 ```
 
 # ServerBootstrapAcceptor
-这个类是ServerBootstrap的内部类。它继承了ChannelInboundHandlerAdapter类。
-聪channelRead中我们可以看到，前面的负责accept的channel进行处理之后，丢给了这个handler一个连接的channel。
-ServerBootstrapAcceptor把childHandler加到了这个连接的channel的pipeline中。
-最后调用childGroup.register()方法，把连接的channel进行操作。
-那么这个childGroup的register方法进行了什么操作呢，我还没看到，对不起。。。
+这个类是ServerBootstrap的内部类。它继承了ChannelInboundHandlerAdapter类。  
+聪channelRead中我们可以看到，前面的负责accept的channel进行处理之后，丢给了这个handler一个连接的channel。  
+ServerBootstrapAcceptor把childHandler加到了这个连接的channel的pipeline中。  
+最后调用childGroup.register()方法，把连接的channel进行操作。  
+那么这个childGroup的register方法进行了什么操作呢，我还没看到，对不起。。。   
 ```java
 private static class ServerBootstrapAcceptor extends ChannelInboundHandlerAdapter {
 

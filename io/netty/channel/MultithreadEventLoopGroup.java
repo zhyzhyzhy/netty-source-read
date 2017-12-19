@@ -14,7 +14,7 @@
  * under the License.
  */
 package io.netty.channel; 
-
+  
 import io.netty.util.NettyRuntime;
 import io.netty.util.concurrent.DefaultThreadFactory;
 import io.netty.util.concurrent.EventExecutorChooserFactory;

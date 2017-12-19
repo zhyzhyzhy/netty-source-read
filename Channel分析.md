@@ -1,9 +1,13 @@
-Channel这一块不想Bootstrap那么简介明了
+Channel这一块不像Bootstrap那么简介明了
 这里包含了Channel，ChannelPipeLine，Future，Promise，Context这些东西。同时还包含了Util包的一些东西。
 非常的复杂。
-为了简化，我主要看NioServerSocketChannel。
+为了简化，我主要看NioServerSocketChannel和NioSocketChannel。
 
-![NioServerSocketChannel](media/NioServerSocketChannel.png)
+![NioServerSocketChannel](media/NioServerSocketChannel.png)  
+![NioSocketChannel](media/NioSocketChannel.png)  
+作为对比它的继承模式，再增加一个EpollServerSocketChannel的图
+![EpollServerSocketChannel](EpollServerSocketChannel.png)
+
 
 # 整体架构
 netty进行了几个抽象。
@@ -20,6 +24,7 @@ EventLoop其实是对一个线程的封装，netty把连接的channel给eventLoo
 ```java
 protected abstract EventExecutor newChild(Executor executor, Object... args) throws Exception;
 ```
+
 在NioEventLoopGroup中的实现是这样
 ```java
 @Override
@@ -28,26 +33,28 @@ protected EventLoop newChild(Executor executor, Object... args) throws Exception
         ((SelectStrategyFactory) args[1]).newSelectStrategy(), (RejectedExecutionHandler) args[2]);
 }
 ```
-
-
-
-
+这个方法中有五个参数
+* EventLoop所属的Group
+* Loop中的Executor
+* SelectorProvider
+* SelectStrategy
+* RejectedExecutionHandler
 
 # new方法到底发生了啥
 在Bootstrap中，我们在设置channel时，传进去了一个class对象
 于是，在里面生成了一个ChannelFactory的工厂对象。
 ```java
 public class ReflectiveChannelFactory<T extends Channel> implements ChannelFactory<T> {
-
+  
     private final Class<? extends T> clazz;
-
+  
     public ReflectiveChannelFactory(Class<? extends T> clazz) {
         if (clazz == null) {
             throw new NullPointerException("clazz");
         }
         this.clazz = clazz;
     }
-
+  
     @Override
     public T newChannel() {
         try {
@@ -63,6 +70,10 @@ public class ReflectiveChannelFactory<T extends Channel> implements ChannelFacto
 在NioServerSocketChannel中
 ```java
 private static final SelectorProvider DEFAULT_SELECTOR_PROVIDER = SelectorProvider.provider();
+public NioServerSocketChannel() {
+    this(newSocket(DEFAULT_SELECTOR_PROVIDER));
+}
+
 private static ServerSocketChannel newSocket(SelectorProvider provider) {
     try {
         return provider.openServerSocketChannel();
@@ -71,9 +82,7 @@ private static ServerSocketChannel newSocket(SelectorProvider provider) {
                 "Failed to open a server socket.", e);
     }
 }
-public NioServerSocketChannel() {
-    this(newSocket(DEFAULT_SELECTOR_PROVIDER));
-}
+
 public NioServerSocketChannel(ServerSocketChannel channel) {
     super(null, channel, SelectionKey.OP_ACCEPT);
     config = new NioServerSocketChannelConfig(this, javaChannel().socket());
@@ -122,11 +131,10 @@ protected AbstractChannel(Channel parent) {
 * ChannelFactory调用newChannel，调用的是ServerSocketChannel的默认构造方法
 * ServerSocketChannel调用newSocket，创建一个新的ServerSocketChannel。
 * AbstractChannel设置parent channel，给channel创建一个唯一的id，一个pipeline和一个unsafe实例
+通过对比EpollServerSocketChannel的图，可以预见到到这一步是所有的channel通用的。  
+下面才是NioServerSocketChannel特有的  
 * AbstractNioChannel设置SelectionKey，服务端的是ON_ACCEPT，同时设置channel为非阻塞。
 * ServerSocketChannel新建一个NioServerSocketChannelConfig，同时把SelectionKey.OP_ACCEPT传给父构造器
-
-
-
 
 
 

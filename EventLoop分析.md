@@ -1,9 +1,9 @@
 # 前言
 
 所以我们还是从NioEventLoop入手
-![NioEventLoop](NioEventLoop.png)
+![NioEventLoop](media/NioEventLoop.png)
 增加一个EpollEventLoop的对比  
-![EpollEventLoop](EpollEventLoop.png)  
+![EpollEventLoop](media/EpollEventLoop.png)  
 可以看到，除了最后一个不同，其他的继承方法几乎都是一样的。
 
 我感觉这是个模板方法
@@ -122,11 +122,14 @@ protected EventLoop newChild(Executor executor, Object... args) throws Exception
         ((SelectStrategyFactory) args[1]).newSelectStrategy(), (RejectedExecutionHandler) args[2]);
 }
 ```
-而在NioEventLoop中确实也只有这么一个构造函数，可以说是很简洁了。
-第二个参数Executor默认的是
-`ThreadPerTaskExecutor(ThreadFactory threadFactory)`  
+而在NioEventLoop中确实也只有这么一个构造函数，可以说是很简洁了。  
+这五个参数
+* EventLoop所在的EventLoopGroup
+* Executor 
+默认的是`ThreadPerTaskExecutor(ThreadFactory threadFactory)`  
 其中的ThreadFactory参见FastThreadLocalThread。
-```
+```java
+// 从名字我们就可以看出其实就是一个任务就创建一个线程的Executor。
 public final class ThreadPerTaskExecutor implements Executor {
     private final ThreadFactory threadFactory;
 
@@ -143,10 +146,14 @@ public final class ThreadPerTaskExecutor implements Executor {
     }
 }
 ```
-从名字我们就可以看出其实就是一个任务就创建一个线程的Executor。
+* SelectorProvider
+* SelectStrategy 
+* RejectedExecutionHandler 
 
+
+下面再详细的看看
 ```java
-NioEventLoop -> 
+## NioEventLoop -> 
 private final SelectorProvider provider;
 NioEventLoop(NioEventLoopGroup parent, Executor executor, SelectorProvider selectorProvider,
              SelectStrategy strategy, RejectedExecutionHandler rejectedExecutionHandler) {
@@ -163,11 +170,11 @@ NioEventLoop(NioEventLoopGroup parent, Executor executor, SelectorProvider selec
     unwrappedSelector = selectorTuple.unwrappedSelector;
     selectStrategy = strategy;
 }
-这里看到有两个selector，一个是selector，一个是unwrappedSelector
-这两个分别有什么用呢，我也不知道。TODO
+//这里看到有两个selector，一个是selector，一个是unwrappedSelector
+//这两个分别有什么用呢，我也不知道。TODO
 
 
-SingleThreadEventExecutor -> 
+## SingleThreadEventExecutor -> 
 protected SingleThreadEventExecutor(
         EventExecutorGroup parent, ThreadFactory threadFactory,
         boolean addTaskWakesUp, int maxPendingTasks, RejectedExecutionHandler rejectedHandler) {
@@ -183,7 +190,7 @@ protected SingleThreadEventLoop(EventLoopGroup parent, ThreadFactory threadFacto
 }
 
 
-SingleThreadEventExecutor -> 
+## SingleThreadEventExecutor -> 
 private final boolean addTaskWakesUp;  
 //最多在等待的Task数量，如果大于，那么就看RejectedExecutionHandler怎么说了。
 //在SingleThreadEventExecutor中定义了这个方法
@@ -216,7 +223,7 @@ protected AbstractScheduledEventExecutor(EventExecutorGroup parent) {
 }
 
 
-AbstractEventExecutor -> 
+## AbstractEventExecutor -> 
 private final EventExecutorGroup parent;
 //EventExecutorGroup其实就是EventLoopGroup的父类抽象
 protected AbstractEventExecutor(EventExecutorGroup parent) {
@@ -232,7 +239,7 @@ protected AbstractEventExecutor(EventExecutorGroup parent) {
 方法。
 那么调用链是啥样的呢。
 ```java
-MultithreadEventLoopGroup -> 
+## MultithreadEventLoopGroup -> 
 public EventLoop next() {
     return (EventLoop) super.next();
 }
@@ -241,7 +248,7 @@ public ChannelFuture register(Channel channel) {
 }
 //从这里我们可以看到是间接的调用了EventLoop的register的方法
 
-SingleThreadEventLoop -> 
+## SingleThreadEventLoop -> 
 public ChannelFuture register(Channel channel) {
     return register(new DefaultChannelPromise(channel, this));
 }
@@ -255,7 +262,7 @@ public ChannelFuture register(final ChannelPromise promise) {
 ```
 
 ```java
-AbstractChannel -> 
+## AbstractChannel -> 
 @Override
 public final void register(EventLoop eventLoop, final ChannelPromise promise) {
     if (eventLoop == null) {
@@ -294,7 +301,7 @@ public final void register(EventLoop eventLoop, final ChannelPromise promise) {
     }
 }
 
-AbstractUnsafe -> 
+## AbstractUnsafe -> 
 private void register0(ChannelPromise promise) {
     try {
         // check if the channel is still open as it could be closed in the mean time when the register
@@ -334,7 +341,7 @@ private void register0(ChannelPromise promise) {
     }
 }
 
-AbstractNioChannel ->
+## AbstractNioChannel ->
 @Override
 protected void doRegister() throws Exception {
     boolean selected = false;
@@ -359,3 +366,204 @@ protected void doRegister() throws Exception {
 
 
 
+# run
+既然EventLoop中包含了一个线程，那么肯定是要run起来的。  
+在ServerBootstrap中，我们在init方法中 
+```java
+@Override
+void init(Channel channel) throws Exception {
+    //...
+    p.addLast(new ChannelInitializer<Channel>() {
+        @Override
+        public void initChannel(final Channel ch) throws Exception {
+            //...
+            ch.eventLoop().execute(new Runnable() {
+                @Override
+                public void run() {
+                    pipeline.addLast(new ServerBootstrapAcceptor(
+                            ch, currentChildGroup, currentChildHandler, currentChildOptions, currentChildAttrs));
+                }
+            });
+        }
+    });
+}
+```
+在initChannel方法中，调用ch所在的eventLoop，执行了一个Runnable。
+那么到EventLoop中就是
+这里会调用startThread()方法，我们的EventLoop线程就是在这里开始的。
+```java
+## SingleThreadEventExecutor ->
+@Override
+public void execute(Runnable task) {
+    if (task == null) {
+        throw new NullPointerException("task");
+    }
+    boolean inEventLoop = inEventLoop();
+    if (inEventLoop) {
+        addTask(task);
+    } else {
+        startThread();
+        addTask(task);
+        if (isShutdown() && removeTask(task)) {
+            reject();
+        }
+    }
+
+    if (!addTaskWakesUp && wakesUpForTask(task)) {
+        wakeup(inEventLoop);
+    }
+}
+private void startThread() {
+    if (state == ST_NOT_STARTED) {
+        if (STATE_UPDATER.compareAndSet(this, ST_NOT_STARTED, ST_STARTED)) {
+            doStartThread();
+        }
+    }
+}
+private void doStartThread() {
+    assert thread == null;
+    executor.execute(new Runnable() {
+        @Override
+        public void run() {
+            thread = Thread.currentThread();
+            if (interrupted) {
+                thread.interrupt();
+            }
+
+            boolean success = false;
+            updateLastExecutionTime();
+            try {
+                //核心在这里，这会调用到NioEventLoop中的run方法
+                SingleThreadEventExecutor.this.run();
+                success = true;
+            } catch (Throwable t) {
+                logger.warn("Unexpected exception from an event executor: ", t);
+            } finally {
+                for (;;) {
+                    int oldState = state;
+                    if (oldState >= ST_SHUTTING_DOWN || STATE_UPDATER.compareAndSet(
+                            SingleThreadEventExecutor.this, oldState, ST_SHUTTING_DOWN)) {
+                        break;
+                    }
+                }
+
+                // Check if confirmShutdown() was called at the end of the loop.
+                if (success && gracefulShutdownStartTime == 0) {
+                    logger.error("Buggy " + EventExecutor.class.getSimpleName() + " implementation; " +
+                            SingleThreadEventExecutor.class.getSimpleName() + ".confirmShutdown() must be called " +
+                            "before run() implementation terminates.");
+                }
+
+                try {
+                    // Run all remaining tasks and shutdown hooks.
+                    for (;;) {
+                        if (confirmShutdown()) {
+                            break;
+                        }
+                    }
+                } finally {
+                    try {
+                        cleanup();
+                    } finally {
+                        STATE_UPDATER.set(SingleThreadEventExecutor.this, ST_TERMINATED);
+                        threadLock.release();
+                        if (!taskQueue.isEmpty()) {
+                            logger.warn(
+                                    "An event executor terminated with " +
+                                            "non-empty task queue (" + taskQueue.size() + ')');
+                        }
+
+                        terminationFuture.setSuccess(null);
+                    }
+                }
+            }
+        }
+    });
+}
+```
+
+下面我们就会NioEventLoop的run方法，也就是线程的run方法进行分析。
+```java
+## NioEventLoop ->
+@Override
+protected void run() {
+    for (;;) {
+        try {
+            switch (selectStrategy.calculateStrategy(selectNowSupplier, hasTasks())) {
+                case SelectStrategy.CONTINUE:
+                    continue;
+                case SelectStrategy.SELECT:
+                    select(wakenUp.getAndSet(false));
+
+                    // 'wakenUp.compareAndSet(false, true)' is always evaluated
+                    // before calling 'selector.wakeup()' to reduce the wake-up
+                    // overhead. (Selector.wakeup() is an expensive operation.)
+                    //
+                    // However, there is a race condition in this approach.
+                    // The race condition is triggered when 'wakenUp' is set to
+                    // true too early.
+                    //
+                    // 'wakenUp' is set to true too early if:
+                    // 1) Selector is waken up between 'wakenUp.set(false)' and
+                    //    'selector.select(...)'. (BAD)
+                    // 2) Selector is waken up between 'selector.select(...)' and
+                    //    'if (wakenUp.get()) { ... }'. (OK)
+                    //
+                    // In the first case, 'wakenUp' is set to true and the
+                    // following 'selector.select(...)' will wake up immediately.
+                    // Until 'wakenUp' is set to false again in the next round,
+                    // 'wakenUp.compareAndSet(false, true)' will fail, and therefore
+                    // any attempt to wake up the Selector will fail, too, causing
+                    // the following 'selector.select(...)' call to block
+                    // unnecessarily.
+                    //
+                    // To fix this problem, we wake up the selector again if wakenUp
+                    // is true immediately after selector.select(...).
+                    // It is inefficient in that it wakes up the selector for both
+                    // the first case (BAD - wake-up required) and the second case
+                    // (OK - no wake-up required).
+
+                    if (wakenUp.get()) {
+                        selector.wakeup();
+                    }
+                    // fall through
+                default:
+            }
+
+            cancelledKeys = 0;
+            needsToSelectAgain = false;
+            final int ioRatio = this.ioRatio;
+            if (ioRatio == 100) {
+                try {
+                    processSelectedKeys();
+                } finally {
+                    // Ensure we always run tasks.
+                    runAllTasks();
+                }
+            } else {
+                final long ioStartTime = System.nanoTime();
+                try {
+                    processSelectedKeys();
+                } finally {
+                    // Ensure we always run tasks.
+                    final long ioTime = System.nanoTime() - ioStartTime;
+                    runAllTasks(ioTime * (100 - ioRatio) / ioRatio);
+                }
+            }
+        } catch (Throwable t) {
+            handleLoopException(t);
+        }
+        // Always handle shutdown even if the loop processing threw an exception.
+        try {
+            if (isShuttingDown()) {
+                closeAll();
+                if (confirmShutdown()) {
+                    return;
+                }
+            }
+        } catch (Throwable t) {
+            handleLoopException(t);
+        }
+    }
+}
+```

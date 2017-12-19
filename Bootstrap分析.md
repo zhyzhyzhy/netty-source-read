@@ -46,8 +46,8 @@ private ChannelFuture doBind(final SocketAddress localAddress) {
     }
 }
 ```
-doBind0()的操作其实也很简单，因为前面在initAndRegister()中我们已经把这个channel注册到第一个eventLoopGroup中，  
-而eventLoopGroup其实可以做一个线程池的作用，于是我们在调用一个channel的bind方法。就把这个作为listen的channel和一个线程绑定了。  
+`doBind0()`的操作其实也很简单，因为前面在`initAndRegister()`中我们已经把这个channel注册到第一个`eventLoopGroup`中，  
+而`eventLoopGroup`其实可以做一个线程池的作用，于是我们在调用一个`channel`的`bind`方法。就把这个作为`listen`的`channel`和一个线程绑定了。  
 ```java
 private static void doBind0(
     final ChannelFuture regFuture, final Channel channel,
@@ -66,8 +66,8 @@ private static void doBind0(
 ```
 
 至此，如果是客户端，其实工作已经完成了。  
-但是如果是服务端，还有一个worker的EventLoopGroup未看到身影。  
-但是其实也已经完成了，就在我们之前的那个initAndRegister()方法中。  
+但是如果是服务端，还有一个worker的`EventLoopGroup`未看到身影。  
+但是其实也已经完成了，就在我们之前的那个`initAndRegister()`方法中。  
 
 # worker-EventLoopGroup的运作
 在`initAndRegister()`方法中
@@ -85,7 +85,7 @@ final ChannelFuture initAndRegister() {
 }
 ```
 调用了`init(channel)`这个方法，这个方法是个抽象方法，各自的子类实现。  
-在ServerBootstrap中的实现最后还对worker的EventLoopGroup进行了操作。  
+在ServerBootstrap中的实现最后还对`worker`的`EventLoopGroup`进行了操作。  
 ```java
 void init(Channel channel) throws Exception {
     //option的操作省略
@@ -110,7 +110,7 @@ void init(Channel channel) throws Exception {
             if (handler != null) {
                 pipeline.addLast(handler);
             }
-
+            //这个execute会初始化EventLoop的线程，让他启动起来开始select和执行一些其他的任务
             ch.eventLoop().execute(new Runnable() {
                 @Override
                 public void run() {
@@ -124,78 +124,78 @@ void init(Channel channel) throws Exception {
 ```
 
 # ServerBootstrapAcceptor
-这个类是ServerBootstrap的内部类。它继承了ChannelInboundHandlerAdapter类。  
-聪channelRead中我们可以看到，前面的负责accept的channel进行处理之后，丢给了这个handler一个连接的channel。  
-ServerBootstrapAcceptor把childHandler加到了这个连接的channel的pipeline中。  
-最后调用childGroup.register()方法，把连接的channel进行操作。  
-那么这个childGroup的register方法进行了什么操作呢，我还没看到，对不起。。。   
+这个类是`ServerBootstrap`的内部类。它继承了`ChannelInboundHandlerAdapter`类。  
+从`channelRead`中我们可以看到，前面的负责`accept`的`channel`进行处理之后，丢给了这个`handler`一个连接的`channel`。  
+`ServerBootstrapAcceptor`把`childHandler`加到了这个连接的`channel`的`pipeline`中。  
+最后调用`childGroup.register()`方法，把连接的`channel`进行操作。  
+那么这个`childGroup`的`register`方法进行了什么操作呢，参看[EventLoop分析.md](EventLoop分析.md)     
 ```java
 private static class ServerBootstrapAcceptor extends ChannelInboundHandlerAdapter {
 
-        private final EventLoopGroup childGroup;
-        private final ChannelHandler childHandler;
-        private final Entry<ChannelOption<?>, Object>[] childOptions;
-        private final Entry<AttributeKey<?>, Object>[] childAttrs;
-        private final Runnable enableAutoReadTask;
+    private final EventLoopGroup childGroup;
+    private final ChannelHandler childHandler;
+    private final Entry<ChannelOption<?>, Object>[] childOptions;
+    private final Entry<AttributeKey<?>, Object>[] childAttrs;
+    private final Runnable enableAutoReadTask;
 
-        ServerBootstrapAcceptor(
-                final Channel channel, EventLoopGroup childGroup, ChannelHandler childHandler,
-                Entry<ChannelOption<?>, Object>[] childOptions, Entry<AttributeKey<?>, Object>[] childAttrs) {
-            this.childGroup = childGroup;
-            this.childHandler = childHandler;
-            this.childOptions = childOptions;
-            this.childAttrs = childAttrs;
+    ServerBootstrapAcceptor(
+            final Channel channel, EventLoopGroup childGroup, ChannelHandler childHandler,
+            Entry<ChannelOption<?>, Object>[] childOptions, Entry<AttributeKey<?>, Object>[] childAttrs) {
+        this.childGroup = childGroup;
+        this.childHandler = childHandler;
+        this.childOptions = childOptions;
+        this.childAttrs = childAttrs;
 
-            enableAutoReadTask = new Runnable() {
+        enableAutoReadTask = new Runnable() {
+            @Override
+            public void run() {
+                channel.config().setAutoRead(true);
+            }
+        };
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public void channelRead(ChannelHandlerContext ctx, Object msg) {
+        final Channel child = (Channel) msg;
+
+        child.pipeline().addLast(childHandler);
+
+        setChannelOptions(child, childOptions, logger);
+
+        for (Entry<AttributeKey<?>, Object> e: childAttrs) {
+            child.attr((AttributeKey<Object>) e.getKey()).set(e.getValue());
+        }
+
+        try {
+            childGroup.register(child).addListener(new ChannelFutureListener() {
                 @Override
-                public void run() {
-                    channel.config().setAutoRead(true);
-                }
-            };
-        }
-
-        @Override
-        @SuppressWarnings("unchecked")
-        public void channelRead(ChannelHandlerContext ctx, Object msg) {
-            final Channel child = (Channel) msg;
-
-            child.pipeline().addLast(childHandler);
-
-            setChannelOptions(child, childOptions, logger);
-
-            for (Entry<AttributeKey<?>, Object> e: childAttrs) {
-                child.attr((AttributeKey<Object>) e.getKey()).set(e.getValue());
-            }
-
-            try {
-                childGroup.register(child).addListener(new ChannelFutureListener() {
-                    @Override
-                    public void operationComplete(ChannelFuture future) throws Exception {
-                        if (!future.isSuccess()) {
-                            forceClose(child, future.cause());
-                        }
+                public void operationComplete(ChannelFuture future) throws Exception {
+                    if (!future.isSuccess()) {
+                        forceClose(child, future.cause());
                     }
-                });
-            } catch (Throwable t) {
-                forceClose(child, t);
-            }
-        }
-
-        private static void forceClose(Channel child, Throwable t) {
-            child.unsafe().closeForcibly();
-            logger.warn("Failed to register an accepted channel: {}", child, t);
-        }
-
-        @Override
-        public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
-            final ChannelConfig config = ctx.channel().config();
-            if (config.isAutoRead()) {
-                config.setAutoRead(false);
-                ctx.channel().eventLoop().schedule(enableAutoReadTask, 1, TimeUnit.SECONDS);
-            }
-            ctx.fireExceptionCaught(cause);
+                }
+            });
+        } catch (Throwable t) {
+            forceClose(child, t);
         }
     }
+
+    private static void forceClose(Channel child, Throwable t) {
+        child.unsafe().closeForcibly();
+        logger.warn("Failed to register an accepted channel: {}", child, t);
+    }
+
+    @Override
+    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
+        final ChannelConfig config = ctx.channel().config();
+        if (config.isAutoRead()) {
+            config.setAutoRead(false);
+            ctx.channel().eventLoop().schedule(enableAutoReadTask, 1, TimeUnit.SECONDS);
+        }
+        ctx.fireExceptionCaught(cause);
+    }
+}
 
 ```
 

@@ -923,7 +923,7 @@ public abstract class SingleThreadEventExecutor extends AbstractScheduledEventEx
         public boolean isInterrupted() {
             return t.isInterrupted();
         }
-
+  
         @Override
         public boolean isDaemon() {
             return t.isDaemon();

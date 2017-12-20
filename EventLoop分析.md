@@ -129,7 +129,7 @@ protected EventLoop newChild(Executor executor, Object... args) throws Exception
 默认的是`ThreadPerTaskExecutor(ThreadFactory threadFactory)`  
 其中的ThreadFactory参见FastThreadLocalThread。
 ```java
-// 从名字我们就可以看出其实就是一个任务就创建一个线程的Executor。
+//从名字我们就可以看出其实就是一个任务就创建一个线程的Executor。
 public final class ThreadPerTaskExecutor implements Executor {
     private final ThreadFactory threadFactory;
 
@@ -146,9 +146,13 @@ public final class ThreadPerTaskExecutor implements Executor {
     }
 }
 ```
-* SelectorProvider
-* SelectStrategy 
-* RejectedExecutionHandler 
+* SelectorProvider 就是SelectorProvider。。。直接调用SelectorProvider.provider()得到的。
+* SelectStrategy  
+默认的是SelectStrategy.INSTANCE 
+参看DefaultSelectStrategy 
+只有两个状态  continue和select
+TODO
+* RejectedExecutionHandler  默认是抛出异常 参见RejectedExecutionHandlers TODO
 
 
 下面再详细的看看
@@ -157,6 +161,8 @@ public final class ThreadPerTaskExecutor implements Executor {
 private final SelectorProvider provider;
 NioEventLoop(NioEventLoopGroup parent, Executor executor, SelectorProvider selectorProvider,
              SelectStrategy strategy, RejectedExecutionHandler rejectedExecutionHandler) {
+    //DEFAULT_MAX_PENDING_TASKS见下，默认是16，不过我们还可以进行设置
+    //第三个参数是addTaskWakesUp，默认设为false，TODO
     super(parent, executor, false, DEFAULT_MAX_PENDING_TASKS, rejectedExecutionHandler);
     if (selectorProvider == null) {
         throw new NullPointerException("selectorProvider");
@@ -165,23 +171,92 @@ NioEventLoop(NioEventLoopGroup parent, Executor executor, SelectorProvider selec
         throw new NullPointerException("selectStrategy");
     }
     provider = selectorProvider;
+    //openSelector方法默认会进行Selector的set优化
+    //参见io.netty.channel.nio.SelectedSelectionKeySet
     final SelectorTuple selectorTuple = openSelector();
     selector = selectorTuple.selector;
     unwrappedSelector = selectorTuple.unwrappedSelector;
     selectStrategy = strategy;
 }
 //这里看到有两个selector，一个是selector，一个是unwrappedSelector
-//这两个分别有什么用呢，我也不知道。TODO
+//如果不进行优化，这两个是一样的
+//如果进行了优化，那么第二个就是优化过的selector， 是netty重写的SelectedSelectionKeySetSelector
+//但是底层的selector对象还是一样的。
+//所以设为两个有什么意思我还是不明白 。。。。 TODO
 
+private SelectorTuple openSelector() {
+    final Selector unwrappedSelector;
+    try {
+        unwrappedSelector = provider.openSelector();
+    } catch (IOException e) {
+        throw new ChannelException("failed to open a new selector", e);
+    }
 
-## SingleThreadEventExecutor -> 
-protected SingleThreadEventExecutor(
-        EventExecutorGroup parent, ThreadFactory threadFactory,
-        boolean addTaskWakesUp, int maxPendingTasks, RejectedExecutionHandler rejectedHandler) {
-    this(parent, new ThreadPerTaskExecutor(threadFactory), addTaskWakesUp, maxPendingTasks, rejectedHandler);
+    //如果不开启优化，那就直接返回了
+    if (DISABLE_KEYSET_OPTIMIZATION) {
+        return new SelectorTuple(unwrappedSelector);
+    }
+
+    //如果开启优化，那么就用SelectedSelectionKeySet代替Selector中的Set
+    final SelectedSelectionKeySet selectedKeySet = new SelectedSelectionKeySet();
+
+    Object maybeSelectorImplClass = AccessController.doPrivileged(new PrivilegedAction<Object>() {
+        @Override
+        public Object run() {
+            try {
+                return Class.forName(
+                        "sun.nio.ch.SelectorImpl",
+                        false,
+                        PlatformDependent.getSystemClassLoader());
+            } catch (Throwable cause) {
+                return cause;
+            }
+        }
+    });
+    //...
+
+    final Class<?> selectorImplClass = (Class<?>) maybeSelectorImplClass;
+
+    Object maybeException = AccessController.doPrivileged(new PrivilegedAction<Object>() {
+        @Override
+        public Object run() {
+            try {
+                Field selectedKeysField = selectorImplClass.getDeclaredField("selectedKeys");
+                Field publicSelectedKeysField = selectorImplClass.getDeclaredField("publicSelectedKeys");
+
+                Throwable cause = ReflectionUtil.trySetAccessible(selectedKeysField);
+                if (cause != null) {
+                    return cause;
+                }
+                cause = ReflectionUtil.trySetAccessible(publicSelectedKeysField);
+                if (cause != null) {
+                    return cause;
+                }
+                //替换操作。
+                selectedKeysField.set(unwrappedSelector, selectedKeySet);
+                publicSelectedKeysField.set(unwrappedSelector, selectedKeySet);
+                return null;
+            } catch (NoSuchFieldException e) {
+                return e;
+            } catch (IllegalAccessException e) {
+                return e;
+            }
+        }
+    });
+   //...
+   selectedKeys = selectedKeySet;
+        logger.trace("instrumented a special java.util.Set into: {}", unwrappedSelector);
+        return new SelectorTuple(unwrappedSelector,
+                                 new SelectedSelectionKeySetSelector(unwrappedSelector, selectedKeySet));
 }
+```
+
+```java
+## SingleThreadEventLoop ->
 //这个tailTask和下面的taskQueue有什么区别呢，我也不知道
 private final Queue<Runnable> tailTasks;
+protected static final int DEFAULT_MAX_PENDING_TASKS = Math.max(16,
+            SystemPropertyUtil.getInt("io.netty.eventLoop.maxPendingTasks", Integer.MAX_VALUE));
 protected SingleThreadEventLoop(EventLoopGroup parent, ThreadFactory threadFactory,
                                 boolean addTaskWakesUp, int maxPendingTasks,
                                 RejectedExecutionHandler rejectedExecutionHandler) {
@@ -189,8 +264,12 @@ protected SingleThreadEventLoop(EventLoopGroup parent, ThreadFactory threadFacto
     tailTasks = newTaskQueue(maxPendingTasks);
 }
 
-
 ## SingleThreadEventExecutor -> 
+protected SingleThreadEventExecutor(
+        EventExecutorGroup parent, ThreadFactory threadFactory,
+        boolean addTaskWakesUp, int maxPendingTasks, RejectedExecutionHandler rejectedHandler) {
+    this(parent, new ThreadPerTaskExecutor(threadFactory), addTaskWakesUp, maxPendingTasks, rejectedHandler);
+}
 private final boolean addTaskWakesUp;  
 //最多在等待的Task数量，如果大于，那么就看RejectedExecutionHandler怎么说了。
 //在SingleThreadEventExecutor中定义了这个方法
@@ -347,6 +426,12 @@ protected void doRegister() throws Exception {
     boolean selected = false;
     for (;;) {
         try {
+            //这里的interested设为了0，就是对什么事都不敢兴趣
+            //OP_ACCEPT = 1 << 4
+            //OP_WRITE = 1 << 2
+            //OP_CONNECT = 1 << 3
+            //OP_ACCEPT = 1 << 4
+            //同时注册到了unwrappedSelector上。。。嗯。。。。 TODO
             selectionKey = javaChannel().register(eventLoop().unwrappedSelector(), 0, this);
             return;
         } catch (CancelledKeyException e) {
@@ -363,8 +448,7 @@ protected void doRegister() throws Exception {
         }
     }
 }
-
-
+```
 
 # run
 既然EventLoop中包含了一个线程，那么肯定是要run起来的。  
@@ -485,13 +569,48 @@ private void doStartThread() {
 下面我们就会NioEventLoop的run方法，也就是线程的run方法进行分析。
 ```java
 ## NioEventLoop ->
+private final IntSupplier selectNowSupplier = new IntSupplier() {
+    @Override
+    public int get() throws Exception {
+        return selectNow();
+    }
+};
+/**
+ * Boolean that controls determines if a blocked Selector.select should
+ * break out of its selection process. In our case we use a timeout for
+ * the select method and the select method will block for that time unless
+ * waken up.
+ */
+private final AtomicBoolean wakenUp = new AtomicBoolean();
+int selectNow() throws IOException {
+    try {
+        return selector.selectNow();
+    } finally {
+        // restore wakeup state if needed
+        if (wakenUp.get()) {
+            //这里的wakeup很奇怪，因为整个run都在一个线程中执行
+            //为啥这里调用一个wakeup
+            //后来查了资料才知道，及时在一个线程中，如果当前无select操作
+            //调用了wakeup之后，下一个select操作将会立刻返回。
+            selector.wakeup();
+        }
+    }
+}
 @Override
 protected void run() {
     for (;;) {
         try {
+            //public int calculateStrategy(IntSupplier selectSupplier, boolean hasTasks) throws Exception {
+            //    return hasTasks ? selectSupplier.get() : SelectStrategy.SELECT;
+            //}
+            //规则就是调用非阻塞的selectNow,如果没有准备好的key，或者没有需要执行的用户task
+            //这个hasTasks判断的是SingleThreadEventExecutor中的taskQueue和SingleThreadEventLoop中的tailTasks是否同时为空
+            //如果两个都满足
+            //那么就continue掉，重新try
             switch (selectStrategy.calculateStrategy(selectNowSupplier, hasTasks())) {
                 case SelectStrategy.CONTINUE:
                     continue;
+                //如果不是，那么就进行select操作。
                 case SelectStrategy.SELECT:
                     select(wakenUp.getAndSet(false));
 
@@ -532,12 +651,15 @@ protected void run() {
 
             cancelledKeys = 0;
             needsToSelectAgain = false;
+            //这个ioRatio TODO
             final int ioRatio = this.ioRatio;
             if (ioRatio == 100) {
                 try {
+                    //处理所有的准备好的key
                     processSelectedKeys();
                 } finally {
                     // Ensure we always run tasks.
+                    //执行用户的task
                     runAllTasks();
                 }
             } else {
@@ -564,6 +686,106 @@ protected void run() {
         } catch (Throwable t) {
             handleLoopException(t);
         }
+    }
+}
+private void select(boolean oldWakenUp) throws IOException {
+    Selector selector = this.selector;
+    try {
+        int selectCnt = 0;
+        long currentTimeNanos = System.nanoTime();
+        long selectDeadLineNanos = currentTimeNanos + delayNanos(currentTimeNanos);
+        for (;;) {
+            long timeoutMillis = (selectDeadLineNanos - currentTimeNanos + 500000L) / 1000000L;
+            if (timeoutMillis <= 0) {
+                if (selectCnt == 0) {
+                    selector.selectNow();
+                    selectCnt = 1;
+                }
+                break;
+            }
+
+            // If a task was submitted when wakenUp value was true, the task didn't get a chance to call
+            // Selector#wakeup. So we need to check task queue again before executing select operation.
+            // If we don't, the task might be pended until select operation was timed out.
+            // It might be pended until idle timeout if IdleStateHandler existed in pipeline.
+            if (hasTasks() && wakenUp.compareAndSet(false, true)) {
+                selector.selectNow();
+                selectCnt = 1;
+                break;
+            }
+
+            int selectedKeys = selector.select(timeoutMillis);
+            selectCnt ++;
+
+            if (selectedKeys != 0 || oldWakenUp || wakenUp.get() || hasTasks() || hasScheduledTasks()) {
+                // - Selected something,
+                // - waken up by user, or
+                // - the task queue has a pending task.
+                // - a scheduled task is ready for processing
+                break;
+            }
+            if (Thread.interrupted()) {
+                // Thread was interrupted so reset selected keys and break so we not run into a busy loop.
+                // As this is most likely a bug in the handler of the user or it's client library we will
+                // also log it.
+                //
+                // See https://github.com/netty/netty/issues/2426
+                if (logger.isDebugEnabled()) {
+                    logger.debug("Selector.select() returned prematurely because " +
+                            "Thread.currentThread().interrupt() was called. Use " +
+                            "NioEventLoop.shutdownGracefully() to shutdown the NioEventLoop.");
+                }
+                selectCnt = 1;
+                break;
+            }
+
+            long time = System.nanoTime();
+            if (time - TimeUnit.MILLISECONDS.toNanos(timeoutMillis) >= currentTimeNanos) {
+                // timeoutMillis elapsed without anything selected.
+                selectCnt = 1;
+            } else if (SELECTOR_AUTO_REBUILD_THRESHOLD > 0 &&
+                    selectCnt >= SELECTOR_AUTO_REBUILD_THRESHOLD) {
+                // The selector returned prematurely many times in a row.
+                // Rebuild the selector to work around the problem.
+                //这里处理jdk的bug问题。通过rebuildSelector来。
+                logger.warn(
+                        "Selector.select() returned prematurely {} times in a row; rebuilding Selector {}.",
+                        selectCnt, selector);
+
+                rebuildSelector();
+                selector = this.selector;
+
+                // Select again to populate selectedKeys.
+                selector.selectNow();
+                selectCnt = 1;
+                break;
+            }
+
+            currentTimeNanos = time;
+        }
+
+        if (selectCnt > MIN_PREMATURE_SELECTOR_RETURNS) {
+            if (logger.isDebugEnabled()) {
+                logger.debug("Selector.select() returned prematurely {} times in a row for Selector {}.",
+                        selectCnt - 1, selector);
+            }
+        }
+    } catch (CancelledKeyException e) {
+        if (logger.isDebugEnabled()) {
+            logger.debug(CancelledKeyException.class.getSimpleName() + " raised by a Selector {} - JDK bug?",
+                    selector, e);
+        }
+        // Harmless exception - log anyway
+    }
+}
+
+
+
+private void processSelectedKeys() {
+    if (selectedKeys != null) {
+        processSelectedKeysOptimized();
+    } else {
+        processSelectedKeysPlain(selector.selectedKeys());
     }
 }
 ```

@@ -20,6 +20,9 @@ import java.util.AbstractSet;
 import java.util.Arrays;
 import java.util.Iterator;
 
+//在Selector默认是使用set存放key的，所以插入效率为O(logn)
+//netty嫌弃不够，于是自己又写了一个，把Selector中的set域替换成这个
+//这个仅支持add方法，底层使用数组，插入为O(1)
 final class SelectedSelectionKeySet extends AbstractSet<SelectionKey> {
 
     SelectionKey[] keys;

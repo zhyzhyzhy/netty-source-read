@@ -14,7 +14,7 @@
  * under the License.
  */
 package io.netty.channel;
-
+  
 import io.netty.util.concurrent.RejectedExecutionHandler;
 import io.netty.util.concurrent.RejectedExecutionHandlers;
 import io.netty.util.concurrent.SingleThreadEventExecutor;
@@ -139,6 +139,7 @@ public abstract class SingleThreadEventLoop extends SingleThreadEventExecutor im
     }
 
     @Override
+    //判断当前有没有需要执行的task
     protected boolean hasTasks() {
         return super.hasTasks() || !tailTasks.isEmpty();
     }

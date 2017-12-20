@@ -6,7 +6,7 @@ Channel这一块不像Bootstrap那么简介明了
 ![NioServerSocketChannel](media/NioServerSocketChannel.png)  
 ![NioSocketChannel](media/NioSocketChannel.png)  
 作为对比它的继承模式，再增加一个EpollServerSocketChannel的图
-![EpollServerSocketChannel](EpollServerSocketChannel.png)
+![EpollServerSocketChannel](media/EpollServerSocketChannel.png)
 
 
 # 整体架构
@@ -33,13 +33,8 @@ protected EventLoop newChild(Executor executor, Object... args) throws Exception
         ((SelectStrategyFactory) args[1]).newSelectStrategy(), (RejectedExecutionHandler) args[2]);
 }
 ```
-这个方法中有五个参数
-* EventLoop所属的Group
-* Loop中的Executor
-* SelectorProvider
-* SelectStrategy
-* RejectedExecutionHandler
-
+这个方法中有五个参数，参见EventLoop TODO
+  
 # new方法到底发生了啥
 在Bootstrap中，我们在设置channel时，传进去了一个class对象
 于是，在里面生成了一个ChannelFactory的工厂对象。
@@ -69,11 +64,8 @@ public class ReflectiveChannelFactory<T extends Channel> implements ChannelFacto
 我们调用newChannel的时候其实是得到了一个默认的构造方法直接newInstance了。
 在NioServerSocketChannel中
 ```java
+## NioServerSocketChannel -> 
 private static final SelectorProvider DEFAULT_SELECTOR_PROVIDER = SelectorProvider.provider();
-public NioServerSocketChannel() {
-    this(newSocket(DEFAULT_SELECTOR_PROVIDER));
-}
-
 private static ServerSocketChannel newSocket(SelectorProvider provider) {
     try {
         return provider.openServerSocketChannel();
@@ -82,21 +74,24 @@ private static ServerSocketChannel newSocket(SelectorProvider provider) {
                 "Failed to open a server socket.", e);
     }
 }
-
+public NioServerSocketChannel() {
+    this(newSocket(DEFAULT_SELECTOR_PROVIDER));
+}
 public NioServerSocketChannel(ServerSocketChannel channel) {
     super(null, channel, SelectionKey.OP_ACCEPT);
     config = new NioServerSocketChannelConfig(this, javaChannel().socket());
 }
 ```
 
-AbstractNioMessageChannel中
 ```java
+## AbstractNioMessageChannel ->
 protected AbstractNioMessageChannel(Channel parent, SelectableChannel ch, int readInterestOp) {
     super(parent, ch, readInterestOp);
 }
 ```
-AbstractNioChannel中
+
 ```java
+## AbstractNioChannel ->
 protected AbstractNioChannel(Channel parent, SelectableChannel ch, int readInterestOp) {
     super(parent);
     this.ch = ch;
@@ -117,12 +112,15 @@ protected AbstractNioChannel(Channel parent, SelectableChannel ch, int readInter
     }
 }
 ```
-AbstractChannel中
+
 ```java
+## AbstractChannel ->
 protected AbstractChannel(Channel parent) {
     this.parent = parent;
     id = newId();
+    //关于Unsafe，参见Unsafe TODO
     unsafe = newUnsafe();
+    //关于ChannelPipeline()，参见ChannelPipeline TODO
     pipeline = newChannelPipeline();
 }
 ```
